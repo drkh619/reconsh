@@ -2,14 +2,21 @@
 
 # Function to print usage
 usage() {
-  echo "Usage: $0 -d <domain> -rl <ratelimit in seconds>"
+  echo "Usage: $0 -d <domain> [-rl <ratelimit in seconds>] [-js]"
+  echo "  -d <domain>            Specify the domain to scan."
+  echo "  -rl <ratelimit>        Specify the rate limit in seconds."
+  echo "  -js                    Find working JS files from the Wayback Machine and save them in a file."
   exit 1
 }
 
 # Check for required arguments
-if [ $# -lt 4 ]; then
+if [ $# -lt 2 ]; then
   usage
 fi
+
+# Initialize variables
+js_flag=false
+ratelimit=0
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -26,23 +33,44 @@ while [[ $# -gt 0 ]]; do
       shift # past argument
       shift # past value
       ;;
+    -js)
+      js_flag=true
+      shift # past argument
+      ;;
     *)
       usage
       ;;
   esac
 done
 
-# Check if both domain and ratelimit are provided
-if [ -z "$domain" ] || [ -z "$ratelimit" ]; then
+# Check if domain is provided
+if [ -z "$domain" ]; then
   usage
 fi
 
-# Convert rate limit from seconds to milliseconds
-ratelimit_ms=$((ratelimit * 1000))
+# Convert rate limit from seconds to milliseconds if provided
+if [ "$ratelimit" -gt 0 ]; then
+  ratelimit_ms=$((ratelimit * 1000))
+fi
+
+# Function to find JS files from the Wayback Machine
+find_js_files() {
+  echo "Finding JS files from Wayback Machine for domain: $domain"
+  waybackurls "$domain" | grep "\.js$" | sort -u > js_files.txt
+  echo "JS files saved to js_files.txt"
+  
+  if [ "$ratelimit" -gt 0 ]; then
+    echo "Running httpx with rate limit: ${ratelimit}s (${ratelimit_ms}ms)"
+    cat sorted.txt | waybackurls | grep "\.js$" | httpx -mc 200 -rl "$ratelimit_ms" >> js.txt
+  else
+    echo "Running httpx without rate limit"
+    cat sorted.txt | waybackurls | grep "\.js$" | httpx -mc 200 >> js.txt
+  fi
+}
 
 # Run subfinder and httprobe
 echo "Running subfinder for domain: $domain"
-subfinder -d "$domain" | httprobe > sub.txt
+subfinder -d "$domain" | httprobe --prefer-https > sub.txt
 
 # Sort and filter the results
 echo "Sorting and filtering results..."
@@ -69,7 +97,17 @@ END {
 }' | tee sorted.txt
 
 # Run fff with specified rate limit
-echo "Running fff with rate limit: ${ratelimit}s (${ratelimit_ms}ms)"
-cat sorted.txt | fff -d "$ratelimit_ms" -S -o roots
+if [ "$ratelimit" -gt 0 ]; then
+  echo "Running fff with rate limit: ${ratelimit}s (${ratelimit_ms}ms)"
+  cat sorted.txt | fff -d "$ratelimit_ms" -S -o roots
+else
+  echo "Running fff without rate limit"
+  cat sorted.txt | fff -S -o roots
+fi
+
+# Check if js_flag is set and run the JS file finding function
+if [ "$js_flag" = true ]; then
+  find_js_files
+fi
 
 echo "Reconnaissance completed."
